@@ -1,0 +1,368 @@
+diff -Naur b/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.cpp a/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.cpp
+--- b/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.cpp	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.cpp	2016-09-06 12:00:40.802829965 +0300
+@@ -21,6 +21,8 @@
+ 
+ #include <QMenu>
+ #include <QTextCodec>
++#include <QMimeDatabase>
++#include <QMimeType>
+ #include <klocalizedstring.h>
+ #include <kio/global.h>
+ #include <kmessagebox.h>
+@@ -115,6 +117,26 @@
+     FileSelectDlg::~FileSelectDlg()
+     {}
+ 
++    QHash<QString, int> FileSelectDlg::loadMimeForTorrentFiles(const QAbstractItemModel *model, const QModelIndex &parent)
++    {
++        QHash<QString, int> hashData;
++        int rowCount = model->rowCount(parent);
++        for(int row = 0; row < rowCount; ++row) {
++            QModelIndex index = model->index(row, 0, parent);
++            if(model->hasChildren(index)) {
++                hashData = hashMerge(loadMimeForTorrentFiles(model, index), hashData);
++            } else {
++                // does not have a child, maybe it is a file node?
++                QString name = index.data().toString();
++                QMimeType mime = QMimeDatabase().mimeTypeForFile(name, QMimeDatabase::MatchExtension);
++                QString mime_name =  (mime.name().isEmpty()) ? "application/octet-stream" : mime.name();
++                hashData[mime_name] += 1;
++            }
++        }
++
++        return hashData;
++    }
++
+     int FileSelectDlg::execute(bt::TorrentInterface* tc, bool* start, bool* skip_check, const QString& location_hint)
+     {
+         if (!tc)
+@@ -153,6 +175,54 @@
+         m_file_view->expandAll();
+         m_file_view->resizeColumnToContents(0);
+ 
++        if(Settings::autoSelectGroup()) {
++            QHash<QString, int> hash = loadMimeForTorrentFiles(filter_model);
++            QString maxKey = "";
++            int maxValue = 0;
++
++            QHash<QString, int>::const_iterator it = hash.constBegin();
++            while(it != hash.constEnd()) {
++                if(it.value() > maxValue) {
++                    maxValue = it.value();
++                    maxKey = it.key();
++                }
++                ++it;
++            }
++
++            kt::GroupManager::Itr itt = gman->begin();
++            while(itt != gman->end()) {
++                kt::Group::Policy policy = itt->second->groupPolicy();
++                QString associated = policy.associated_file_type;
++                QString groupName = itt->first;
++                QString key = maxKey;
++                if(!associated.isEmpty()) {
++                    if((associated.compare(key, Qt::CaseInsensitive)) == 0) {
++                        m_cmbGroups->setCurrentIndex(idx);
++                        groupActivated(idx);
++                    } else {
++                        if((associated.indexOf('*') != -1) && (key.indexOf('/') != -1)) {
++                            //wildcard matching
++                            int delimeter_pos = key.indexOf('/');
++                            while(key.length() > delimeter_pos) {
++                                QString newKey = key + ".*";
++                                int idx = associated.indexOf(QRegExp(newKey));
++                                if(idx != -1) {
++                                    idx = m_cmbGroups->findText(groupName);
++                                    if(idx != -1) {
++                                        m_cmbGroups->setCurrentIndex(idx);
++                                        groupActivated(idx);
++                                    }
++                                    break;
++                                }
++                                key.chop(1);
++                            }
++                        }
++                    }
++                }
++                ++itt;
++            }
++        }
++
+         updateSizeLabels();
+ 
+         bool multi_file_torrent = tc->getStats().multi_file_torrent;
+@@ -444,9 +514,9 @@
+         //now custom ones
+         while (it != gman->end())
+         {
+-            grps << it->first;
+             if (!it->second->isStandardGroup())
+             {
++                grps << it->first;
+                 if (it->second == initial_group)
+                     selected = cnt + 1;
+                 cnt++;
+@@ -473,7 +543,10 @@
+     void FileSelectDlg::groupActivated(int idx)
+     {
+         if (idx == 0)
++        {
++            m_downloadLocation->setUrl(QUrl(Settings::saveDir()));
+             return; // No group selected
++        }
+ 
+         // find the selected group
+         Group* g = gman->find(m_cmbGroups->itemText(idx));
+diff -Naur b/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.h a/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.h
+--- b/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.h	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/dialogs/fileselectdlg.h	2016-09-06 12:00:11.162831134 +0300
+@@ -94,6 +94,7 @@
+     private:
+         void populateFields(const QString& location_hint);
+         void loadGroups();
++        QHash<QString, int> loadMimeForTorrentFiles(const QAbstractItemModel *model, const QModelIndex &parent = QModelIndex());
+ 
+     private:
+         bt::TorrentInterface* tc;
+@@ -110,6 +111,25 @@
+         QSet<QString> move_on_completion_location_history;
+         bt::Uint64 already_downloaded;
+     };
++
++    template <typename A, typename B>
++    QHash<A, B> hashMerge(QHash<A, B> hashOne, QHash<A, B> hashTwo) {
++        QHash<A, B> result;
++        typename QHash<A, B>::const_iterator it = hashOne.constBegin();
++
++        while(it != hashOne.constEnd()) {
++            result[it.key()] += it.value();
++            ++it;
++        }
++
++        it = hashTwo.constBegin();
++        while(it != hashTwo.constEnd()) {
++            result[it.key()] += it.value();
++            ++it;
++        }
++
++        return result;
++    }
+ }
+ 
+ #endif
+diff -Naur b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.cpp a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.cpp
+--- b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.cpp	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.cpp	2016-09-06 12:03:12.289490649 +0300
+@@ -20,6 +20,10 @@
+  ***************************************************************************/
+ #include "grouppolicydlg.h"
+ #include <groups/group.h>
++#include <QComboBox>
++#include <QMimeDatabase>
++#include <QMimeType>
++#include <QLineEdit>
+ 
+ namespace kt
+ {
+@@ -48,6 +52,20 @@
+         m_max_seed_time->setValue(p.max_seed_time);
+         m_max_upload_rate->setValue(p.max_upload_rate);
+         m_max_download_rate->setValue(p.max_download_rate);
++
++        QList<QMimeType> types = QMimeDatabase().allMimeTypes();
++        QStringList list;
++        foreach(QMimeType type, types) {
++            list.append(type.name());
++        }
++
++        list.removeDuplicates();
++        list.sort();
++        fileTypeBox->addItems(list);
++        if(!p.associated_file_type.isEmpty()) {
++            fileTypeCheckBox->setCheckState(Qt::Checked);
++            fileTypeBox->lineEdit()->setText(p.associated_file_type);
++        }
+     }
+ 
+ 
+@@ -64,6 +82,12 @@
+         if (m_default_move_on_completion_enabled->isChecked() && m_default_move_on_completion_location->url().isValid())
+             p.default_move_on_completion_location = m_default_move_on_completion_location->url().toDisplayString(QUrl::PreferLocalFile);
+ 
++        if(fileTypeCheckBox->checkState() == Qt::Checked) {
++            p.associated_file_type = fileTypeBox->currentText();
++        } else {
++            p.associated_file_type.clear();
++        }
++
+         p.only_apply_on_new_torrents = m_only_new->isChecked();
+         p.max_share_ratio = m_max_share_ratio->value();
+         p.max_seed_time = m_max_seed_time->value();
+diff -Naur b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.h a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.h
+--- b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.h	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.h	2016-09-06 12:03:25.616156789 +0300
+@@ -33,10 +33,10 @@
+     */
+     class GroupPolicyDlg : public QDialog, public Ui_GroupPolicyDlg
+     {
++        Q_OBJECT
+     public:
+         GroupPolicyDlg(Group* group, QWidget* parent);
+         virtual ~GroupPolicyDlg();
+-
+         virtual void accept();
+     private:
+         Group* group;
+diff -Naur b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.ui a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.ui
+--- b/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.ui	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/groups/grouppolicydlg.ui	2016-09-06 09:39:40.746497359 +0300
+@@ -6,8 +6,8 @@
+    <rect>
+     <x>0</x>
+     <y>0</y>
+-    <width>446</width>
+-    <height>307</height>
++    <width>460</width>
++    <height>340</height>
+    </rect>
+   </property>
+   <property name="windowTitle">
+@@ -58,6 +58,27 @@
+     </widget>
+    </item>
+    <item>
++    <layout class="QHBoxLayout" name="horizontalLayout">
++     <item>
++      <widget class="QCheckBox" name="fileTypeCheckBox">
++       <property name="text">
++        <string>Associate with file type</string>
++       </property>
++      </widget>
++     </item>
++     <item>
++      <widget class="QComboBox" name="fileTypeBox">
++       <property name="enabled">
++        <bool>false</bool>
++       </property>
++       <property name="editable">
++        <bool>true</bool>
++       </property>
++      </widget>
++     </item>
++    </layout>
++   </item>
++   <item>
+     <widget class="QGroupBox" name="groupBox">
+      <property name="toolTip">
+       <string>Default settings for torrents which are added to the group.</string>
+@@ -217,11 +238,27 @@
+    <hints>
+     <hint type="sourcelabel">
+      <x>98</x>
+-     <y>39</y>
++     <y>63</y>
+     </hint>
+     <hint type="destinationlabel">
+      <x>310</x>
+-     <y>47</y>
++     <y>79</y>
++    </hint>
++   </hints>
++  </connection>
++  <connection>
++   <sender>fileTypeCheckBox</sender>
++   <signal>toggled(bool)</signal>
++   <receiver>fileTypeBox</receiver>
++   <slot>setEnabled(bool)</slot>
++   <hints>
++    <hint type="sourcelabel">
++     <x>131</x>
++     <y>98</y>
++    </hint>
++    <hint type="destinationlabel">
++     <x>275</x>
++     <y>100</y>
+     </hint>
+    </hints>
+   </connection>
+diff -Naur b/ktorrent-5.0.1/ktorrent/pref/generalpref.ui a/ktorrent-5.0.1/ktorrent/pref/generalpref.ui
+--- b/ktorrent-5.0.1/ktorrent/pref/generalpref.ui	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/ktorrent/pref/generalpref.ui	2016-09-06 11:54:29.322844633 +0300
+@@ -7,7 +7,7 @@
+     <x>0</x>
+     <y>0</y>
+     <width>427</width>
+-    <height>423</height>
++    <height>435</height>
+    </rect>
+   </property>
+   <layout class="QVBoxLayout">
+@@ -88,7 +88,7 @@
+    <item>
+     <widget class="QGroupBox" name="kcfg_showSystemTrayIcon">
+      <property name="title">
+-      <string>System Tray Icon</string>
++      <string>&amp;System Tray Icon</string>
+      </property>
+      <property name="checkable">
+       <bool>true</bool>
+@@ -164,6 +164,13 @@
+         </property>
+        </widget>
+       </item>
++      <item>
++       <widget class="QCheckBox" name="kcfg_autoSelectGroup">
++        <property name="text">
++         <string>Automatically select group by mime type</string>
++        </property>
++       </widget>
++      </item>
+      </layout>
+     </widget>
+    </item>
+diff -Naur b/ktorrent-5.0.1/libktcore/groups/group.h a/ktorrent-5.0.1/libktcore/groups/group.h
+--- b/ktorrent-5.0.1/libktcore/groups/group.h	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/libktcore/groups/group.h	2016-09-05 12:40:33.469420594 +0300
+@@ -61,6 +61,7 @@
+         {
+             QString default_save_location;
+             QString default_move_on_completion_location;
++            QString associated_file_type;
+             float max_share_ratio;
+             float max_seed_time;
+             bt::Uint32 max_upload_rate;
+diff -Naur b/ktorrent-5.0.1/libktcore/groups/torrentgroup.cpp a/ktorrent-5.0.1/libktcore/groups/torrentgroup.cpp
+--- b/ktorrent-5.0.1/libktcore/groups/torrentgroup.cpp	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/libktcore/groups/torrentgroup.cpp	2016-09-05 12:47:41.566070354 +0300
+@@ -89,6 +89,8 @@
+         enc->write((bt::Uint32)(policy.only_apply_on_new_torrents ? 1 : 0));
+         enc->write(QByteArrayLiteral("default_move_on_completion_location"));
+         enc->write(policy.default_move_on_completion_location.toUtf8());
++        enc->write(QByteArrayLiteral("associated_file_type"));
++        enc->write(policy.associated_file_type.toUtf8());
+         enc->end();
+         enc->end();
+     }
+@@ -143,6 +145,8 @@
+ 
+             if (gp->getValue(QByteArrayLiteral("only_apply_on_new_torrents")))
+                 policy.only_apply_on_new_torrents = gp->getInt(QByteArrayLiteral("only_apply_on_new_torrents"));
++            if(gp->getValue(QByteArrayLiteral("associated_file_type")))
++                policy.associated_file_type = gp->getString(QByteArrayLiteral("associated_file_type"), 0);
+         }
+     }
+ 
+diff -Naur b/ktorrent-5.0.1/libktcore/ktorrent.kcfg a/ktorrent-5.0.1/libktcore/ktorrent.kcfg
+--- b/ktorrent-5.0.1/libktcore/ktorrent.kcfg	2016-04-17 18:08:34.000000000 +0300
++++ a/ktorrent-5.0.1/libktcore/ktorrent.kcfg	2016-09-06 11:53:20.526180683 +0300
+@@ -297,6 +297,9 @@
+ 		<entry name="highlightNewTorrents" type="Bool">
+ 			<default>true</default>
+ 		</entry>
++		<entry name="autoSelectGroup" type="Bool">
++			<default>true</default>
++		</entry>
+         <entry name="numMagnetDownloadingSlots" type="Int">
+             <min>1</min>
+             <max>100</max>

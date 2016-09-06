@@ -1,0 +1,92 @@
+diff -ur a/ktorrent/gui.cpp b/ktorrent/gui.cpp
+--- a/ktorrent/gui.cpp	2016-03-30 12:25:13.000000000 +0300
++++ b/ktorrent/gui.cpp	2016-05-01 18:49:13.635425613 +0300
+@@ -45,6 +45,7 @@
+ #include <torrent/queuemanager.h>
+ #include <torrent/torrentcontrol.h>
+ #include <util/log.h>
++#include <util/functions.h>
+ #include <util/timer.h>
+ #include <util/error.h>
+ #include <dht/dhtbase.h>
+@@ -443,6 +444,17 @@
+             status_bar->updateSpeed(stats.upload_speed, stats.download_speed);
+             status_bar->updateTransfer(stats.bytes_uploaded, stats.bytes_downloaded);
+             status_bar->updateDHTStatus(Globals::instance().getDHT().isRunning(), Globals::instance().getDHT().getStats());
++            
++            //All speed to Window status bar
++            if(Settings::showTotalSpeedInTitle())
++            {
++                QString down_up_speed = QString(i18n("D: %1 | U: %2")).arg(BytesPerSecToString((double)stats.download_speed)).arg(BytesPerSecToString((double)stats.upload_speed));
++                setCaption(down_up_speed);
++            }
++            else
++            {
++               setCaption(core->getGroupManager()->allGroup()->groupName());  
++            }
+ 
+             tray_icon->updateStats(stats);
+             core->updateGuiPlugins();
+diff -ur a/ktorrent/pref/generalpref.ui b/ktorrent/pref/generalpref.ui
+--- a/ktorrent/pref/generalpref.ui	2016-03-30 12:25:13.000000000 +0300
++++ b/ktorrent/pref/generalpref.ui	2016-05-01 18:38:41.486394489 +0300
+@@ -171,6 +171,13 @@
+         </property>
+        </widget>
+       </item>
++      <item>
++       <widget class="QCheckBox" name="kcfg_showTotalSpeedInTitle">
++        <property name="text">
++         <string>Show total speed in the window title</string>
++        </property>
++       </widget>
++      </item>
+      </layout>
+     </widget>
+    </item>
+diff -ur a/libktcore/dbus/dbussettings.cpp b/libktcore/dbus/dbussettings.cpp
+--- a/libktcore/dbus/dbussettings.cpp	2016-03-30 12:25:13.000000000 +0300
++++ b/libktcore/dbus/dbussettings.cpp	2016-05-01 18:46:27.148417416 +0300
+@@ -758,6 +758,16 @@
+         Settings::setAutoRenameSingleFileTorrents(val);
+     }
+ 
++    bool DBusSettings::showTotalSpeedInTitle()
++    {
++        return Settings::showTotalSpeedInTitle();
++    }
++    
++    void DBusSettings::setShowTotalSpeedInTitle(bool val)
++    {
++        Settings::setShowTotalSpeedInTitle(val);
++    }
++    
+     int DBusSettings::numMagnetDownloadingSlots()
+     {
+         return Settings::numMagnetDownloadingSlots();
+diff -ur a/libktcore/dbus/dbussettings.h b/libktcore/dbus/dbussettings.h
+--- a/libktcore/dbus/dbussettings.h	2016-03-30 12:25:13.000000000 +0300
++++ b/libktcore/dbus/dbussettings.h	2016-05-01 18:46:55.223418798 +0300
+@@ -181,6 +181,8 @@
+         Q_SCRIPTABLE void setPrimaryTransportProtocol(int val);
+         Q_SCRIPTABLE bool autoRenameSingleFileTorrents();
+         Q_SCRIPTABLE void setAutoRenameSingleFileTorrents(bool val);
++        Q_SCRIPTABLE bool showTotalSpeedInTitle();
++        Q_SCRIPTABLE void setShowTotalSpeedInTitle(bool val);
+         Q_SCRIPTABLE int numMagnetDownloadingSlots();
+         Q_SCRIPTABLE void setNumMagnetDownloadingSlots(int val);
+         Q_SCRIPTABLE bool requeueMagnets();
+diff -ur a/libktcore/ktorrent.kcfg b/libktcore/ktorrent.kcfg
+--- a/libktcore/ktorrent.kcfg	2016-03-30 12:25:13.000000000 +0300
++++ b/libktcore/ktorrent.kcfg	2016-05-01 18:48:01.079422041 +0300
+@@ -66,6 +66,10 @@
+ 			<label>Show a system tray icon</label>
+ 			<default>true</default>
+ 		</entry>
++		<entry name="showTotalSpeedInTitle" type="Bool">
++			<label>Show a total speeds in the title</label>
++			<default>false</default>
++		</entry>
+ 		<entry name="showSpeedBarInTrayIcon" type="Bool">
+ 			<label>Show speed bar in tray icon</label>
+ 			<default>false</default>
